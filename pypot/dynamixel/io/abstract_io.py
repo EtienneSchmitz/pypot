@@ -12,7 +12,6 @@ from contextlib import contextmanager
 from ..conversion import (dxl_code_all, dxl_decode_all, decode_error,
                           dxl_to_model)
 
-
 logger = logging.getLogger(__name__)
 # With this logger you should always provide as extra:
 # - the port
@@ -117,7 +116,9 @@ class AbstractDxlIO(object):
                 self.close(_force_lock=True)
 
                 if port in self.__used_ports:
-                    logging.warn('Another instance of pypot is using the port {}. This might be an issue in Jupyter Notebook, in that case restart the kernel.'.format(port))
+                    logging.warn(
+                        'Another instance of pypot is using the port {}. This might be an issue in Jupyter Notebook, in that case restart the kernel.'.format(
+                            port))
 
                 # Dirty walkaround to fix a strange bug.
                 # Observed with the USB2AX on Linux with pyserial 2.7
@@ -265,7 +266,7 @@ class AbstractDxlIO(object):
         srl = []
         for id in ids:
             try:
-                srl.extend(self._get_status_return_level((id, ),
+                srl.extend(self._get_status_return_level((id,),
                                                          error_handler=None, convert=convert))
             except DxlTimeoutError as e:
                 if self.ping(id):
@@ -310,7 +311,7 @@ class AbstractDxlIO(object):
     def set_pid_gain(self, pid_for_id, **kwargs):
         """ Sets the pid gain to the specified motors. """
         pid_for_id = dict(zip(pid_for_id.keys(),
-                          [tuple(reversed(t)) for t in pid_for_id.values()]))
+                              [tuple(reversed(t)) for t in pid_for_id.values()]))
         self._set_pid_gain(pid_for_id, **kwargs)
 
     # MARK: - Generic Getter / Setter
@@ -463,7 +464,7 @@ class AbstractDxlIO(object):
 
         data = []
         for motor_id, value in value_for_id.items():
-            data.extend(itertools.chain((motor_id, ),
+            data.extend(itertools.chain((motor_id,),
                                         dxl_code_all(value, control.length, control.nb_elem)))
 
         wp = self._protocol.DxlSyncWritePacket(control.address, control.length * control.nb_elem, data)
@@ -487,7 +488,7 @@ class AbstractDxlIO(object):
                 nbytes = self._serial.write(data)
             except serial.serialutil.SerialTimeoutException:
                 nbytes = 0
-            
+
             if len(data) != nbytes:
                 raise DxlCommunicationError(self,
                                             'instruction packet not entirely sent',
@@ -525,11 +526,18 @@ class AbstractDxlIO(object):
     def _send_packet(self,
                      instruction_packet, wait_for_status_packet=True,
                      error_handler=None,
-                     _force_lock=False):
+                     _force_lock=False,
+                     retry_once=True):
 
         if not error_handler:
-            return self.__real_send(instruction_packet, wait_for_status_packet, _force_lock)
 
+            try:
+                return self.__real_send(instruction_packet, wait_for_status_packet, _force_lock)
+            except DxlError as e:
+                if retry_once:
+                    return self.__real_send(instruction_packet, wait_for_status_packet, _force_lock)
+                else:
+                    raise e
         try:
             sp = self.__real_send(instruction_packet, wait_for_status_packet, _force_lock)
 
@@ -546,7 +554,11 @@ class AbstractDxlIO(object):
             error_handler.handle_timeout(e)
 
         except DxlCommunicationError as e:
-            error_handler.handle_communication_error(e)
+            if retry_once:
+                retry_once = False
+                self._send_packet(instruction_packet, wait_for_status_packet, error_handler, _force_lock, retry_once)
+            else:
+                error_handler.handle_communication_error(e)
 
 
 # MARK: - Dxl Errors
@@ -557,6 +569,7 @@ class DxlError(Exception):
 
 class DxlCommunicationError(DxlError):
     """ Base error for communication error encountered when using :class:`~pypot.dynamixel.io.DxlIO`. """
+
     def __init__(self, dxl_io, message, instruction_packet):
         self.dxl_io = dxl_io
         self.message = message
@@ -568,6 +581,7 @@ class DxlCommunicationError(DxlError):
 
 class DxlTimeoutError(DxlCommunicationError):
     """ Timeout error encountered when using :class:`~pypot.dynamixel.io.DxlIO`. """
+
     def __init__(self, dxl_io, instruction_packet, ids):
         DxlCommunicationError.__init__(self, dxl_io, 'timeout occured', instruction_packet)
         self.ids = ids
